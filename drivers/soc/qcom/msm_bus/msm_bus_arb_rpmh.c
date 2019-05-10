@@ -1399,9 +1399,6 @@ static int update_client_paths(struct msm_bus_client *client, bool log_trns,
 					__func__, ret, pdata->active_only);
 			goto exit_update_client_paths;
 		}
-
-		if (log_trns)
-			getpath_debug(src, lnode, pdata->active_only);
 	}
 	commit_data();
 exit_update_client_paths:
