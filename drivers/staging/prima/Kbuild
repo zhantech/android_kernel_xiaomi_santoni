@@ -763,7 +763,7 @@ EXTRA_CFLAGS += -Wno-enum-conversion
 endif
 
 # Fix build for GCC 4.7
-EXTRA_CFLAGS += $(call cc-option,-Wno-maybe-uninitialized) -Wno-misleading-indentation -Wno-unused-function -Wno-enum-conversion -Wno-array-bounds -Wno-pointer-bool-conversion -Wno-parentheses-equality -Wno-typedef-redefinition -Wno-empty-body -Wno-non-literal-null-conversion
+EXTRA_CFLAGS += -DNDEBUG $(call cc-disable-warning, maybe-uninitialized) -Wno-unused-function -Wno-unused-variable
 
 ifeq ($(CONFIG_WLAN_OFFLOAD_PACKETS),y)
 CDEFINES += -DWLAN_FEATURE_OFFLOAD_PACKETS
