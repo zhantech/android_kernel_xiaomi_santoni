@@ -17,8 +17,10 @@
 &vendor {
 	mtp_batterydata: qcom,battery-data {
 		qcom,batt-id-range-pct = <15>;
-		#include "batterydata-itech-3000mah.dtsi"
-		#include "batterydata-ascent-3450mAh.dtsi"
+		#include "batterydata-qrd-Desay-4v4-4100mah.dtsi"
+		#include "batterydata-qrd-Atl-4v4-4100mah.dtsi"
+		#include "batterydata-qrd-Coslight-4v4-4100mah.dtsi"
+		#include "batterydata-qrd-Default-4v4-4100mah.dtsi"
 	};
 };
 

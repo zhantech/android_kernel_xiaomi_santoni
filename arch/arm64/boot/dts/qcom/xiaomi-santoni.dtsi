@@ -13,7 +13,7 @@
  */
 
 #include "pmi8950.dtsi"
-#include "msm8937-pmi8950-mtp.dtsi"
+#include "msm8940-pmi8950-mtp.dtsi"
 #include "msm8937-mdss-panels.dtsi"
 #include "dsi-panel-hx8394f-boe-720p-video.dtsi"
 #include "dsi-panel-ili9881c-ebbg-720p-video.dtsi"
