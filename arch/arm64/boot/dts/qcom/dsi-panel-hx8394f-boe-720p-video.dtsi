@@ -126,5 +126,7 @@
 		qcom,mdss-dsi-init-delay-us = <50000>;
 		qcom,mdss-night-brightness = <7 25 45 67>;
 		qcom,mdss-dsi-tx-eot-append;
+        	qcom,ulps-enabled;
+		qcom,panel-allow-phy-poweroff;
 	};
 };
