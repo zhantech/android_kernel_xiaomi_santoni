@@ -187,7 +187,6 @@
 			qcom,pmic-revid = <&pmi8950_revid>;
 			qcom,force-aicl-rerun;
 			qcom,aicl-rerun-period-s = <180>;
-			qcom,autoadjust-vfloat;
 
 			qcom,chgr@1000 {
 				reg = <0x1000 0x100>;
@@ -504,6 +503,7 @@
 			qcom,en-ext-pfet-sc-pro;
 			qcom,pmic-revid = <&pmi8950_revid>;
 			qcom,cons-sync-write-delay-us = <1000>;
+			qcom,en-cabc;
 		};
 
 		flash_led: qcom,leds@d300 {
