@@ -18,6 +18,7 @@
 #include <linux/buffer_head.h>
 #include <linux/time.h>
 #include "exfat.h"
+#include "version.h"
 
 #ifdef CONFIG_EXFAT_UEVENT
 static struct kobject exfat_uevent_kobj;
@@ -53,9 +54,6 @@ void exfat_uevent_ro_remount(struct super_block *sb)
 	snprintf(minor, sizeof(minor), "MINOR=%d", MINOR(bd_dev));
 
 	kobject_uevent_env(&exfat_uevent_kobj, KOBJ_CHANGE, envp);
-
-	ST_LOG("[EXFAT](%s[%d:%d]): Uevent triggered\n",
-			sb->s_id, MAJOR(bd_dev), MINOR(bd_dev));
 }
 #endif
 
@@ -88,7 +86,11 @@ void __exfat_fs_error(struct super_block *sb, int report, const char *fmt, ...)
 		panic("exFAT-fs (%s[%d:%d]): fs panic from previous error\n",
 			sb->s_id, MAJOR(bd_dev), MINOR(bd_dev));
 	} else if (opts->errors == EXFAT_ERRORS_RO && !EXFAT_IS_SB_RDONLY(sb)) {
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
+		sb->s_flags |= MS_RDONLY;
+#else
 		sb->s_flags |= SB_RDONLY;
+#endif
 		pr_err("exFAT-fs (%s[%d:%d]): file-system has been set to "
 			"read-only\n", sb->s_id, MAJOR(bd_dev), MINOR(bd_dev));
 		exfat_uevent_ro_remount(sb);
@@ -116,6 +118,12 @@ void __exfat_msg(struct super_block *sb, const char *level, int st, const char *
 	va_end(args);
 }
 EXPORT_SYMBOL(__exfat_msg);
+
+void exfat_log_version(void)
+{
+	pr_info("exFAT: file-system version %s\n", EXFAT_VERSION);
+}
+EXPORT_SYMBOL(exfat_log_version);
 
 /* <linux/time.h> externs sys_tz
  * extern struct timezone sys_tz;
@@ -152,7 +160,7 @@ static time_t accum_days_in_year[] = {
 };
 
 /* Convert a FAT time/date pair to a UNIX date (seconds since 1 1 70). */
-void exfat_time_fat2unix(struct exfat_sb_info *sbi, struct timespec64 *ts,
+void exfat_time_fat2unix(struct exfat_sb_info *sbi, struct timespec_compat *ts,
 		DATE_TIME_T *tp)
 {
 	time_t year = tp->Year;
@@ -175,7 +183,7 @@ void exfat_time_fat2unix(struct exfat_sb_info *sbi, struct timespec64 *ts,
 }
 
 /* Convert linear UNIX date to a FAT time/date pair. */
-void exfat_time_unix2fat(struct exfat_sb_info *sbi, struct timespec64 *ts,
+void exfat_time_unix2fat(struct exfat_sb_info *sbi, struct timespec_compat *ts,
 		DATE_TIME_T *tp)
 {
 	time_t second = ts->tv_sec;
@@ -239,10 +247,10 @@ void exfat_time_unix2fat(struct exfat_sb_info *sbi, struct timespec64 *ts,
 
 TIMESTAMP_T *exfat_tm_now(struct exfat_sb_info *sbi, TIMESTAMP_T *tp)
 {
-	struct timespec64 ts;
+	struct timespec_compat ts;
 	DATE_TIME_T dt;
 
-	ktime_get_real_ts64(&ts);
+	KTIME_GET_REAL_TS(&ts);
 	exfat_time_unix2fat(sbi, &ts, &dt);
 
 	tp->year = dt.Year;
@@ -268,79 +276,9 @@ u16 exfat_calc_chksum_2byte(void *data, s32 len, u16 chksum, s32 type)
 	return chksum;
 }
 
-#ifdef CONFIG_EXFAT_TRACE_ELAPSED_TIME
-struct timeval __t1, __t2;
-u32 exfat_time_current_usec(struct timeval *tv)
-{
-	do_gettimeofday(tv);
-	return (u32)(tv->tv_sec*1000000 + tv->tv_usec);
-}
-#endif /* CONFIG_EXFAT_TRACE_ELAPSED_TIME */
-
-#ifdef CONFIG_EXFAT_DBG_CAREFUL
-/* Check the consistency of i_size_ondisk (FAT32, or flags 0x01 only) */
-void exfat_debug_check_clusters(struct inode *inode)
-{
-	unsigned int num_clusters;
-	volatile uint32_t tmp_fat_chain[50];
-	volatile int tmp_i = 0;
-	volatile unsigned int num_clusters_org, tmp_i = 0;
-	CHAIN_T clu;
-	FILE_ID_T *fid = &(EXFAT_I(inode)->fid);
-	FS_INFO_T *fsi = &(EXFAT_SB(inode->i_sb)->fsi);
-
-	if (EXFAT_I(inode)->i_size_ondisk == 0)
-		num_clusters = 0;
-	else
-		num_clusters = ((EXFAT_I(inode)->i_size_ondisk-1) >> fsi->cluster_size_bits) + 1;
-
-	clu.dir = fid->start_clu;
-	clu.size = num_clusters;
-	clu.flags = fid->flags;
-
-	num_clusters_org = num_clusters;
-
-	if (clu.flags == 0x03)
-		return;
-
-	while (num_clusters > 0) {
-		/* FAT chain logging */
-		tmp_fat_chain[tmp_i] = clu.dir;
-		tmp_i++;
-		if (tmp_i >= 50)
-			tmp_i = 0;
-
-		BUG_ON(IS_CLUS_EOF(clu.dir) || IS_CLUS_FREE(clu.dir));
-
-		if (get_next_clus_safe(inode->i_sb, &(clu.dir)))
-			EMSG("%s: failed to access to FAT\n");
-
-		num_clusters--;
-	}
-
-	BUG_ON(!IS_CLUS_EOF(clu.dir));
-}
-
-#endif /* CONFIG_EXFAT_DBG_CAREFUL */
-
 #ifdef CONFIG_EXFAT_DBG_MSG
 void __exfat_dmsg(int level, const char *fmt, ...)
 {
-#ifdef CONFIG_EXFAT_DBG_SHOW_PID
-	struct va_format vaf;
-	va_list args;
-
-	/* should check type */
-	if (level > EXFAT_MSG_LEVEL)
-		return;
-
-	va_start(args, fmt);
-	vaf.fmt = fmt;
-	vaf.va = &args;
-	/* fmt already includes KERN_ pacility level */
-	printk("[%u] %pV", current->pid,  &vaf);
-	va_end(args);
-#else
 	va_list args;
 
 	/* should check type */
@@ -351,6 +289,5 @@ void __exfat_dmsg(int level, const char *fmt, ...)
 	/* fmt already includes KERN_ pacility level */
 	vprintk(fmt, args);
 	va_end(args);
-#endif
 }
 #endif

@@ -15,10 +15,32 @@
 #include <linux/ratelimit.h>
 #include <linux/version.h>
 #include <linux/kobject.h>
-#include <linux/iversion.h>
 #include "api.h"
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 16, 0)
+#include <linux/iversion.h>
+#define INC_IVERSION(x)		(inode_inc_iversion(x))
+#define GET_IVERSION(x)		(inode_peek_iversion_raw(x))
+#define SET_IVERSION(x,y)	(inode_set_iversion(x, y))
+#else
+#define INC_IVERSION(x)		(x->i_version++)
+#define GET_IVERSION(x)		(x->i_version)
+#define SET_IVERSION(x,y)	(x->i_version = y)
+#endif
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 18, 0)
+#define timespec_compat	timespec64
+#define KTIME_GET_REAL_TS ktime_get_real_ts64
+#else
+#define timespec_compat	timespec
+#define KTIME_GET_REAL_TS ktime_get_real_ts
+#endif
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
+#define EXFAT_IS_SB_RDONLY(sb)	((sb)->s_flags & MS_RDONLY)
+#else
 #define EXFAT_IS_SB_RDONLY(sb)	((sb)->s_flags & SB_RDONLY)
+#endif
 
 /*
  * exfat error flags
@@ -70,14 +92,19 @@
  * exfat mount in-memory data
  */
 struct exfat_mount_options {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 5, 0)
 	kuid_t fs_uid;
 	kgid_t fs_gid;
-
+#else /* LINUX_VERSION_CODE < KERNEL_VERSION(3, 5, 0) */
+	uid_t fs_uid;
+	gid_t fs_gid;
+#endif
 	unsigned short fs_fmask;
 	unsigned short fs_dmask;
 	unsigned short allow_utime; /* permission for setting the [am]time */
 	unsigned short codepage;    /* codepage for shortname conversions */
 	char *iocharset;            /* charset for filename input/display */
+	unsigned char quiet;        /* fake return success on setattr(e.g. chmods/chowns) */
 
 	unsigned char utf8;
 	unsigned char casesensitive;
@@ -100,12 +127,13 @@ struct exfat_sb_info {
 	struct mutex s_vlock;   /* volume lock */
 	int use_vmalloc;
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 7, 0)
 	int s_dirt;
 	struct mutex s_lock;    /* superblock lock */
 	int write_super_queued;			/* Write_super work is pending? */
 	struct delayed_work write_super_work;   /* Work_queue data structrue for write_super() */
 	spinlock_t work_lock;			/* Lock for WQ */
-
+#endif
 	struct super_block *host_sb;		/* sb pointer */
 	struct exfat_mount_options options;
 	struct nls_table *nls_disk; /* Codepage used on disk */
@@ -115,17 +143,7 @@ struct exfat_sb_info {
 	spinlock_t inode_hash_lock;
 	struct hlist_head inode_hashtable[EXFAT_HASH_SIZE];
 	struct kobject sb_kobj;
-#ifdef CONFIG_EXFAT_DBG_IOCTL
-	long debug_flags;
-#endif /* CONFIG_EXFAT_DBG_IOCTL */
 
-#ifdef CONFIG_EXFAT_TRACE_IO
-	/* Statistics for allocator */
-	unsigned int stat_n_pages_written;	/* # of written pages in total */
-	unsigned int stat_n_pages_added;	/* # of added blocks in total */
-	unsigned int stat_n_bdev_pages_written;	/* # of written pages owned by bdev inode */
-	unsigned int stat_n_pages_confused;
-#endif
 	atomic_t stat_n_pages_queued;	/* # of pages in the request queue (approx.) */
 };
 
@@ -140,7 +158,9 @@ struct exfat_inode_info {
 	loff_t i_size_aligned;          /* block-aligned i_size (used in cont_write_begin) */
 	loff_t i_pos;               /* on-disk position of directory entry or 0 */
 	struct hlist_node i_hash_fat;    /* hash by i_location */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 4, 0)
 	struct rw_semaphore truncate_lock; /* protect bmap against truncate */
+#endif
 	struct inode vfs_inode;
 };
 
@@ -261,19 +281,14 @@ __exfat_msg(struct super_block *sb, const char *lv, int st, const char *fmt, ...
 	__exfat_msg(sb, lv, 0, fmt, ## args)
 #define exfat_log_msg(sb, lv, fmt, args...)          \
 	__exfat_msg(sb, lv, 1, fmt, ## args)
-extern void exfat_time_fat2unix(struct exfat_sb_info *sbi, struct timespec64 *ts,
+extern void exfat_log_version(void);
+extern void exfat_time_fat2unix(struct exfat_sb_info *sbi, struct timespec_compat *ts,
 				DATE_TIME_T *tp);
-extern void exfat_time_unix2fat(struct exfat_sb_info *sbi, struct timespec64 *ts,
+extern void exfat_time_unix2fat(struct exfat_sb_info *sbi, struct timespec_compat *ts,
 				DATE_TIME_T *tp);
 extern TIMESTAMP_T *exfat_tm_now(struct exfat_sb_info *sbi, TIMESTAMP_T *tm);
 
 #ifdef CONFIG_EXFAT_DEBUG
-
-#ifdef CONFIG_EXFAT_DBG_CAREFUL
-void exfat_debug_check_clusters(struct inode *inode);
-#else
-#define exfat_debug_check_clusters(inode)
-#endif /* CONFIG_EXFAT_DBG_CAREFUL */
 
 #ifdef CONFIG_EXFAT_DBG_BUGON
 #define exfat_debug_bug_on(expr)        BUG_ON(expr)
@@ -289,30 +304,10 @@ void exfat_debug_check_clusters(struct inode *inode);
 
 #else /* CONFIG_EXFAT_DEBUG */
 
-#define exfat_debug_check_clusters(inode)
 #define exfat_debug_bug_on(expr)
 #define exfat_debug_warn_on(expr)
 
 #endif /* CONFIG_EXFAT_DEBUG */
-
-#ifdef CONFIG_EXFAT_TRACE_ELAPSED_TIME
-u32 exfat_time_current_usec(struct timeval *tv);
-extern struct timeval __t1;
-extern struct timeval __t2;
-
-#define TIME_GET(tv)	exfat_time_current_usec(tv)
-#define TIME_START(s)	exfat_time_current_usec(s)
-#define TIME_END(e)	exfat_time_current_usec(e)
-#define TIME_ELAPSED(s, e) ((u32)(((e)->tv_sec - (s)->tv_sec) * 1000000 + \
-			((e)->tv_usec - (s)->tv_usec)))
-#define PRINT_TIME(n)	pr_info("exFAT: Elapsed time %d = %d (usec)\n", n, (__t2 - __t1))
-#else /* CONFIG_EXFAT_TRACE_ELAPSED_TIME */
-#define TIME_GET(tv)    (0)
-#define TIME_START(s)
-#define TIME_END(e)
-#define TIME_ELAPSED(s, e)      (0)
-#define PRINT_TIME(n)
-#endif /* CONFIG_EXFAT_TRACE_ELAPSED_TIME */
 
 #define	EXFAT_MSG_LV_NONE	(0x00000000)
 #define EXFAT_MSG_LV_ERR	(0x00000001)
