@@ -130,6 +130,42 @@ do {								\
 #define smp_mb__before_spinlock()	smp_wmb()
 #endif
 
+/*
+ * This barrier must provide two things:
+ *
+ *   - it must guarantee a STORE before the spin_lock() is ordered against a
+ *     LOAD after it, see the comments at its two usage sites.
+ *
+ *   - it must ensure the critical section is RCsc.
+ *
+ * The latter is important for cases where we observe values written by other
+ * CPUs in spin-loops, without barriers, while being subject to scheduling.
+ *
+ * CPU0			CPU1			CPU2
+ *
+ *			for (;;) {
+ *			  if (READ_ONCE(X))
+ *			    break;
+ *			}
+ * X=1
+ *			<sched-out>
+ *						<sched-in>
+ *						r = X;
+ *
+ * without transitivity it could be that CPU1 observes X!=0 breaks the loop,
+ * we get migrated and CPU2 sees X==0.
+ *
+ * Since most load-store architectures implement ACQUIRE with an smp_mb() after
+ * the LL/SC loop, they need no further barriers. Similarly all our TSO
+ * architectures imply an smp_mb() for each atomic instruction and equally don't
+ * need more.
+ *
+ * Architectures that can implement ACQUIRE better need to take care.
+ */
+#ifndef smp_mb__after_spinlock
+#define smp_mb__after_spinlock()	do { } while (0)
+#endif
+
 /**
  * raw_spin_unlock_wait - wait until the spinlock gets unlocked
  * @lock: the spinlock in question.
@@ -377,6 +413,26 @@ static __always_inline int spin_trylock_irq(spinlock_t *lock)
 	raw_spin_trylock_irqsave(spinlock_check(lock), flags); \
 })
 
+/**
+ * spin_unlock_wait - Interpose between successive critical sections
+ * @lock: the spinlock whose critical sections are to be interposed.
+ *
+ * Semantically this is equivalent to a spin_lock() immediately
+ * followed by a spin_unlock().  However, most architectures have
+ * more efficient implementations in which the spin_unlock_wait()
+ * cannot block concurrent lock acquisition, and in some cases
+ * where spin_unlock_wait() does not write to the lock variable.
+ * Nevertheless, spin_unlock_wait() can have high overhead, so if
+ * you feel the need to use it, please check to see if there is
+ * a better way to get your job done.
+ *
+ * The ordering guarantees provided by spin_unlock_wait() are:
+ *
+ * 1.  All accesses preceding the spin_unlock_wait() happen before
+ *     any accesses in later critical sections for this same lock.
+ * 2.  All accesses following the spin_unlock_wait() happen after
+ *     any accesses in earlier critical sections for this same lock.
+ */
 static __always_inline void spin_unlock_wait(spinlock_t *lock)
 {
 	raw_spin_unlock_wait(&lock->rlock);

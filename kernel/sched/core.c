@@ -72,6 +72,7 @@
 #include <linux/slab.h>
 #include <linux/init_task.h>
 #include <linux/context_tracking.h>
+#include <linux/rcupdate_wait.h>
 #include <linux/compiler.h>
 #include <linux/frame.h>
 #include <linux/prefetch.h>
@@ -2094,8 +2095,8 @@ try_to_wake_up(struct task_struct *p, unsigned int state, int wake_flags)
 	 * reordered with p->state check below. This pairs with mb() in
 	 * set_current_state() the waiting thread does.
 	 */
-	smp_mb__before_spinlock();
 	raw_spin_lock_irqsave(&p->pi_lock, flags);
+	smp_mb__after_spinlock();
 	if (!(p->state & state))
 		goto out;
 
@@ -3579,16 +3580,16 @@ static void __sched notrace __schedule(bool preempt)
 		hrtick_clear(rq);
 
 	local_irq_disable();
-	rcu_note_context_switch();
+	rcu_note_context_switch(preempt);
 
 	/*
 	 * Make sure that signal_pending_state()->signal_pending() below
 	 * can't be reordered with __set_current_state(TASK_INTERRUPTIBLE)
 	 * done by the caller to avoid the race with signal_wake_up().
 	 */
-	smp_mb__before_spinlock();
 	raw_spin_lock(&rq->lock);
 	rq_pin_lock(rq, &rf);
+	smp_mb__after_spinlock();
 
 	rq->clock_skip_update <<= 1; /* promote REQ to ACT */
 
@@ -5168,6 +5169,7 @@ int __sched _cond_resched(void)
 		preempt_schedule_common();
 		return 1;
 	}
+	rcu_all_qs();
 	return 0;
 }
 EXPORT_SYMBOL(_cond_resched);
@@ -5478,6 +5480,7 @@ void sched_show_task(struct task_struct *p)
 	show_stack(p, NULL);
 	put_task_stack(p);
 }
+EXPORT_SYMBOL_GPL(sched_show_task);
 
 void show_state_filter(unsigned long state_filter)
 {
@@ -8058,15 +8061,9 @@ int sched_cpu_deactivate(unsigned int cpu)
 	 * users of this state to go away such that all new such users will
 	 * observe it.
 	 *
-	 * For CONFIG_PREEMPT we have preemptible RCU and its sync_rcu() might
-	 * not imply sync_sched(), so wait for both.
-	 *
 	 * Do sync before park smpboot threads to take care the rcu boost case.
 	 */
-	if (IS_ENABLED(CONFIG_PREEMPT))
-		synchronize_rcu_mult(call_rcu, call_rcu_sched);
-	else
-		synchronize_rcu();
+	synchronize_rcu();
 
 #ifdef CONFIG_SCHED_SMT
 	/*
